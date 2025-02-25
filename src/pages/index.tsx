@@ -5,6 +5,18 @@ import { text } from 'stream/consumers';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
 
+
+
+interface IStyle {
+  bold: boolean;
+  italic: boolean;
+}
+
+interface IText {
+  text: string;
+  style: IStyle;
+}
+
 export const extractTextFromPDF = async (
   file: File, 
   setMessage: (text: string) => void
@@ -12,18 +24,27 @@ export const extractTextFromPDF = async (
   try {
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    let fullText = '';
     
-    const applyStyle = (text: string, style: { bold: boolean; italic: boolean }) => {
-      if (style.bold && style.italic) return `<i><b>${text}</b></i>`;
-      if (style.bold) return `<b>${text}</b>`;
-      if (style.italic) return `<i>${text}</i>`;
-      return text;
+    const applyStyle = (text: string, prevStyle: IStyle | null, currStyle: IStyle) => {
+      let styledText = "";
+    
+      // Eğer önceki stil farklıysa önce kapatma tagleri eklenir
+      if (prevStyle && JSON.stringify(prevStyle) !== JSON.stringify(currStyle)) {
+        if (prevStyle.bold) styledText += `</b>`;
+        if (prevStyle.italic) styledText += `</i>`;
+      }
+    
+      // Yeni stil açılır
+      if (!prevStyle || JSON.stringify(prevStyle) !== JSON.stringify(currStyle)) {
+        if (currStyle.italic) styledText += `<i>`;
+        if (currStyle.bold) styledText += `<b>`;
+      }
+    
+      styledText += text;
+      return styledText;
     };
     
-    let fullText = '';
-    let lastText = '';
-    let lastStyle = { bold: false, italic: false };
-    let currentStyle = { ...lastStyle };
 
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
@@ -33,42 +54,43 @@ export const extractTextFromPDF = async (
       console.log(textContent.items);
       fullText += `${(pageNum > 1 ? '\n' : '')}--- Page ${pageNum} ---\n`;
       
-      textContent.items.forEach((item: any, index: number) => {
+      const items: IText[] = textContent.items.map((item: any) => {
         const textItem = item as TextItem;
         let styledText = textItem.str;
+        styledText += textItem.hasEOL ? '\n' : '';
 
         const fontObj = page.commonObjs.has(textItem.fontName)
           ? page.commonObjs.get(textItem.fontName)
           : null;
 
+        let style = {bold: false, italic: false}
         if (fontObj && fontObj.name) {
           const fontName = fontObj.name.toLowerCase();
-          currentStyle.bold = fontName.includes("bold");
-          currentStyle.italic = fontName.includes("italic");
+          style.bold = fontName.includes("bold");
+          style.italic = fontName.includes("italic");
         }
-
-        if(index > 1 &&
-           currentStyle.bold === lastStyle.bold &&
-           currentStyle.italic === lastStyle.italic &&
-          !textItem.hasEOL
-          ) {
-          lastText += styledText;
-        } else {
-          fullText += applyStyle(lastText, lastStyle);
-          fullText += textItem.hasEOL ? '\n' : '';
-          lastText = styledText;
-          lastStyle = currentStyle;
-        }
-
+        
+        return {
+          text: styledText,
+          style: style
+        } 
         
       });
 
+      fullText += ""
+      let prevStyle: IStyle | null = null;
+      for(const item of items){
+        fullText += applyStyle(item.text, prevStyle, item.style);
+        prevStyle = item.style; // Bir sonraki eleman için önceki stil güncellenir     
+      }
+      if (prevStyle) {
+        if (prevStyle.bold) fullText += `</b>`;
+        if (prevStyle.italic) fullText += `</i>`;
+      }
       //sayfa sonu
     }
 
     // belge sonu
-    fullText += applyStyle(lastText, lastStyle);
-
 
     console.log(fullText);
     setMessage(fullText);
@@ -113,8 +135,15 @@ export default function Home() {
       <button onClick={handleSubmit} className="bg-blue-500 text-white px-4 py-2 rounded">
         Process PDF
       </button>
-      {jsonOutput && (
-        <pre className="mt-4 p-3 bg-gray-100 rounded">{JSON.stringify(jsonOutput, null, 2)}</pre>
+      {message && (
+        <div className="mt-4 p-6 bg-white rounded-lg shadow-lg">
+          <div 
+            className="whitespace-pre-wrap font-sans text-gray-800 leading-relaxed"
+            dangerouslySetInnerHTML={{ 
+              __html: message.replace(/\n/g, '<br/>') 
+            }} 
+          />
+        </div>
       )}
     </div>
   );
